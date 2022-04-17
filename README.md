@@ -14,4 +14,4 @@ the script works fine on my laptop. it could work on yours IF you have a i686 (3
 + gcc
 
 # for more help...
-```./kerninstall help```
+```./kerninstall help```. also the kerninstall file must be on the kernel directory (where the make file is)
