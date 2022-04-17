@@ -1,0 +1,188 @@
+#!/usr/bin/env python
+
+from os import chdir, rename, listdir, remove
+from sys import argv, exit
+from subprocess import run, Popen, PIPE, CalledProcessError
+
+LVERSION = None
+UPGRUB = True
+CCACHE = True
+NOREBOOT = True
+INSTALLMODS = True
+INSTALLKERNEL = True
+
+if int(run(['id', '--user'], capture_output=True).stdout) != 0:
+    exit(' => Please run as root')
+
+
+try:
+    LVERSION = argv[1]
+
+    if argv[1] == 'help':
+        exit('kerninstall, a kernel compiler and installer script to save you time, written in python 3\n\nTo use this script you must:\n 1) Have python3\n 2) Have ccache setup IF youre going to use ccache WHICH by default is TRUE (use --NOCC to disable)\n 3) Use the tarball kernel from kernel.org, since this script has been made to work ONLY with the tarball from the kernel.org website\n 4) Have the required packages which are required to build the kernel\n\nKVERSION & LVERSION\n - KVERSION stands for kernel version, which is usually 5.1x.x. It is needed in order to keep the files in /boot organized. Same thing with LVERSION which stands for local version (CONFIG_LOCALVERSION, "make menuconfig"). If you dont have local version set up on your config, then youll need to use --NOLV flag (MUST be the first flag when running this script! Example: ./kerninstall --NOLV, --...)\n\nFlags\n - NORBOOT. This flag reboots the system after installing the kernel. It uses the "reboot" command. If no such command exists, you must change the reboot command in this file\n - NOGRUB. Updates grub after installing the kernel, so grub can recognize the kernel and boot the kernel. It runs the "update-grub" command. If the commmand to update grub its different on your distro, you must change the command\n - NOINST. Installs (moves) the "arch/ARCH/boot/bzImage" and "System.map" files to /boot directory. If no such files exist, the script will warn. If the script cant move the files, it will warn\n - NOCC. ccache saves the compiling progress so if you accidentaly cancel or if the compilation fails, you dont have to recompile again. To use it, you must have ccache installed and set up correctly\n - NOMODS. Install kernel mods after compiling. If you dont have any modules, you should use this option, otherwise youll probably get errors\n - NOLV. Doesnt append a local version at the end of the files (initramfs, system.map, bzImage). If youre not using CONFIG_LOCALVERSION, then you dont need this flag')
+
+
+    if argv[1] == '--NOLV': # allow mixed chars too?
+        LVERSION = ''
+
+
+except IndexError:
+    exit('kerninstall - a kernel compiler and installer script to save you time. For more help/info run: ./kerninstall help\n Usage: ./kerninstall LVERSION KVERSION --FLAGS\n  KVERSION and LVERSION are REQUIRED!\n  KVERSION == kernel version (5.1x.x) && LVERSION == local version (CONFIG_LOCALVERSION)\n\nFlags:\n    NOLV: Dont append CONFIG_LOCALVERSION to files. Default: None.\n NORBOOT: Reboot system after installing kernel.    Default: True.\n  NOGRUB: Update grub after installing kernel.      Default: True.\n  NOINST: Install kernel after compiling.           Default: True.\n    NOCC: Use ccache while compiling.               Default: True.\n  NOMODS: Install kernel modules.                   Default: True.\n\n Using one of the flags will make the value FALSE! AND do not forget to add "--" when using a flag!')
+
+
+try:
+    argv[2]
+
+except IndexError:
+    exit(' => Kernel version missing. (./kerninstall LVERSION KVERSION [run the script without args for help])')
+
+
+def execute(cmd):
+    popen = Popen(cmd, stdout=PIPE, universal_newlines=True, shell=True)
+
+    for stdout_line in iter(popen.stdout.readline, ""):
+        yield stdout_line 
+
+    popen.stdout.close()
+    return_code = popen.wait()
+
+    if return_code:
+        exit(f' ==> Compiling failed, please fix the issues and run this script again')
+
+
+def compilekernel(ccache, installmod, installkernel):
+    print(' => Compiling kernel...')
+
+    makecmd = 'make'
+
+    if ccache:
+        makecmd = 'make CC="ccache gcc"'
+
+    for out in execute([makecmd]):
+        print(out, end="")
+
+    print(' => Trying to install kernel modules...')
+
+    if installmod:
+        if run(['make modules_install'], shell=True).returncode != 0:
+            exit(' ==> Failed to install kernel modules, please fix the issues and run this script again maybe?\nOr try installing manually')
+
+    if installkernel:
+        installkernel(LVERSION, UPGRUB, False)
+
+
+def installkernel(version, grub, ignerr, reboot):
+    if ignerr:
+        err = print
+
+    else:
+        err = exit
+
+    print(' => Moving System.map file to /boot...')
+
+    try:
+        rename('System.map', f'/boot/System.map-kernel-{argv[2]}_{version}')
+        print(' ==> Done')
+
+    except Exception as exc:
+        err(f' ==> There was an error while trying to move System.map file -> {exc}')
+
+    print(' => Moving arch/x86/boot/bzImage to /boot...')
+
+    try:
+        rename('arch/x86/boot/bzImage', f'/boot/kernel-{argv[2]}_{version}')
+        print(' ==> Done')
+
+    except Exception as exc:
+        err(f' ==> There was an error while trying to move bzImage kernel file: {exc}')
+
+    if grub:
+        print(' => Updating grub...')
+
+        grubresult = run(['update-grub']).returncode
+
+        if grubresult != 0:
+            print(' ==> There was an error while running update-grub command')
+
+        print(' ==> Done')
+
+    if reboot:
+        try:
+            run(['reboot'])
+
+        except Exception as exc:
+            err(f' ==> There was an error while trying to reboot: {exc}')
+
+
+for arg in argv:
+    if '--nocc' in arg.lower():
+        CCACHE = False
+
+    if '--nogrub' in arg.lower():
+        UPGRUB = False
+
+    if '--nomods' in arg.lower():
+        INSTALLMODS = False
+
+    if '--noinst' in arg.lower():
+        INSTALLKERNEL = False
+
+    if '--norboot' in arg.lower():
+        NOREBOOT = False
+
+
+print(f' => Kerninstall running with:\n      CC: {CCACHE}\n  UPGRUB: {UPGRUB}\n  INMODS: {INSTALLMODS}\nLVERSION: {LVERSION}\nKVERSION: {argv[2]}')
+
+continueask = input('\n ==> Continue? Enter for yes, n for no (exit)\n --> ')
+
+if continueask == '':
+    pass
+
+elif continueask.lower() == 'n':
+    exit(' => Exit')
+
+else:
+    exit(f' ==> Invalid input?? -> "{continueask}"')
+
+
+if 'System.map' in listdir() and 'bzImage' in listdir('arch/x86/boot'):
+    ask = input(' => Theres already a bzImage AND System.map file. Do you want to install these files (i), or recompile (r)? (This will delete the existing bzImage and System.map file)\n --> ')
+
+    try:
+        if ask.lower() == 'i':
+            installkernel(LVERSION, UPGRUB, False)
+
+        elif ask.lower() == 'r':
+            compilekernel(CCACHE, INSTALLMODS, INSTALLKERNEL)
+
+        else:
+            exit(f' ==> Invalid input?? -> "{ask.lower()}"')
+
+    except KeyboardInterrupt:
+        exit(' => Exit')
+
+
+elif 'System.map' in listdir() or 'bzImage' in listdir('arch/x86/boot'):
+    action = input(' => There is already a bzImage OR System.map file.\nIt is better if you recompile to avoid errors.\nPress enter to install WITH errors, e to exit or q to delete those files and compile\n --> ')
+
+    if action.lower() == '':
+        installkernel(LVERSION, UPGRUB, True)
+
+    elif action.lower() == 'e':
+        exit()
+
+    elif action.lower() == 'q':
+        try:
+            remove('System.map')
+            remove('arch/x86/boot/bzImage')
+
+        except FileNotFoundError:
+            print(' ==> Skipping file...')
+
+        compilekernel(CCACHE, INSTALLMODS, INSTALLKERNEL)
+
+    else:
+        exit(f' ==> Invalid input?? -> "{action.lower()}"')
+
+else:
+    compilekernel(CCACHE, INSTALLMODS, INSTALLKERNEL)
